@@ -126,8 +126,13 @@ func (a *Server) DeleteOIDCConnector(ctx context.Context, connectorName string) 
 }
 
 // CreateOIDCAuthRequest delegates the method call to the oidcAuthService if present,
-// or returns a NotImplemented error if not present.
+// or returns a NotImplemented error if not present. Custom sub-kind connectors
+// are handled by the in-tree OSS implementation regardless of whether an
+// enterprise OIDC service is registered.
 func (a *Server) CreateOIDCAuthRequest(ctx context.Context, req types.OIDCAuthRequest) (*types.OIDCAuthRequest, error) {
+	if connector, ok := a.lookupCustomOIDCConnector(ctx, req); ok {
+		return a.createCustomOIDCAuthRequest(ctx, req, connector)
+	}
 	if a.oidcAuthService == nil {
 		return nil, errOIDCNotImplemented
 	}
@@ -139,6 +144,10 @@ func (a *Server) CreateOIDCAuthRequest(ctx context.Context, req types.OIDCAuthRe
 // CreateOIDCAuthRequestForMFA delegates the method call to the oidcAuthService if present,
 // or returns a NotImplemented error if not present.
 func (a *Server) CreateOIDCAuthRequestForMFA(ctx context.Context, req types.OIDCAuthRequest) (*types.OIDCAuthRequest, error) {
+	if connector, ok := a.lookupCustomOIDCConnector(ctx, req); ok {
+		// SSO MFA over custom OIDC uses the same authorize flow.
+		return a.createCustomOIDCAuthRequest(ctx, req, connector)
+	}
 	if a.oidcAuthService == nil {
 		return nil, errOIDCNotImplemented
 	}
@@ -148,12 +157,49 @@ func (a *Server) CreateOIDCAuthRequestForMFA(ctx context.Context, req types.OIDC
 }
 
 // ValidateOIDCAuthCallback delegates the method call to the oidcAuthService if present,
-// or returns a NotImplemented error if not present.
+// or returns a NotImplemented error if not present. The callback dispatcher
+// inspects the stored auth request to detect Custom sub-kind connectors and
+// routes those to the in-tree OSS implementation.
 func (a *Server) ValidateOIDCAuthCallback(ctx context.Context, q url.Values) (*authclient.OIDCAuthResponse, error) {
+	if state := q.Get("state"); state != "" {
+		if req, err := a.Services.GetOIDCAuthRequest(ctx, state); err == nil {
+			if connector, err := a.GetOIDCConnector(ctx, req.ConnectorID, false); err == nil &&
+				connector.GetSubKind() == types.OIDCConnectorSubKindCustom {
+				return a.validateCustomOIDCAuthCallback(ctx, q)
+			}
+		}
+	}
 	if a.oidcAuthService == nil {
 		return nil, errOIDCNotImplemented
 	}
 
 	resp, err := a.oidcAuthService.ValidateOIDCAuthCallback(ctx, q)
 	return resp, trace.Wrap(err)
+}
+
+// lookupCustomOIDCConnector resolves the OIDC connector referenced by the
+// given auth request and reports whether it is a Custom sub-kind. The
+// resolved connector (with secrets) is returned for reuse by the caller.
+// For the SSO test flow the connector spec is embedded in the request and the
+// sub-kind is implied.
+func (a *Server) lookupCustomOIDCConnector(ctx context.Context, req types.OIDCAuthRequest) (types.OIDCConnector, bool) {
+	if req.SSOTestFlow && req.ConnectorSpec != nil {
+		c, err := types.NewOIDCConnector(req.ConnectorID, *req.ConnectorSpec)
+		if err != nil {
+			return nil, false
+		}
+		c.SetSubKind(types.OIDCConnectorSubKindCustom)
+		return c, true
+	}
+	if req.ConnectorID == "" {
+		return nil, false
+	}
+	connector, err := a.GetOIDCConnector(ctx, req.ConnectorID, true)
+	if err != nil {
+		return nil, false
+	}
+	if connector.GetSubKind() != types.OIDCConnectorSubKindCustom {
+		return nil, false
+	}
+	return connector, true
 }

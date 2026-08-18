@@ -33,6 +33,13 @@ import (
 	"github.com/gravitational/teleport/api/utils"
 )
 
+// OIDCConnectorSubKindCustom marks an OIDCConnector as targeting a
+// standards-compliant OIDC identity provider (e.g. Keycloak). Connectors with
+// this sub-kind are exempt from the "OIDC requires Enterprise" entitlement
+// gate and are served by the in-tree OSS OIDC implementation
+// (lib/auth/oidc_custom.go).
+const OIDCConnectorSubKindCustom = "custom_oidc"
+
 // OIDCConnector specifies configuration for Open ID Connect compatible external
 // identity provider, e.g. google in some organization
 type OIDCConnector interface {
@@ -419,6 +426,12 @@ func (o *OIDCConnectorV3) CheckAndSetDefaults() error {
 
 	if err := o.Metadata.CheckAndSetDefaults(); err != nil {
 		return trace.Wrap(err)
+	}
+
+	switch o.SubKind {
+	case "", OIDCConnectorSubKindCustom:
+	default:
+		return trace.BadParameter("unsupported OIDC connector sub_kind %q", o.SubKind)
 	}
 
 	if name := o.Metadata.Name; slices.Contains(constants.SystemConnectors, name) {

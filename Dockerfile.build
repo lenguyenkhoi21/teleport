@@ -1,0 +1,154 @@
+# =============================================================================
+# Teleport Builder - Docker image for building Teleport v18.10.3
+# =============================================================================
+# Usage:
+#   1. Build image:
+#      docker build -t teleport-builder -f Dockerfile.build .
+#
+#   2. Build binaries (mount source + output):
+#      docker run --rm \
+#        -v $(pwd):/src \
+#        -v $(pwd)/output:/output \
+#        teleport-builder
+#
+#   3. Build chỉ binary cụ thể:
+#      docker run --rm \
+#        -v $(pwd):/src \
+#        -v $(pwd)/output:/output \
+#        teleport-builder teleport tctl
+#
+#   Binaries sẽ nằm trong ./output/
+# =============================================================================
+
+FROM ubuntu:22.04
+
+ARG GO_VERSION=1.25.12
+ARG RUST_VERSION=1.94.0
+ARG NODE_VERSION=24
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# --- System dependencies ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    git \
+    curl \
+    wget \
+    ca-certificates \
+    # PAM support
+    libpam0g-dev \
+    # libfido2 (MFA hardware keys)
+    libfido2-dev \
+    # BPF (enhanced session recording)
+    clang \
+    llvm \
+    libelf-dev \
+    # Misc
+    zip \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Go ---
+RUN wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && rm /tmp/go.tar.gz
+
+ENV PATH="/usr/local/go/bin:/root/go/bin:${PATH}"
+ENV GOPATH="/root/go"
+
+# --- Rust ---
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain ${RUST_VERSION}
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Add cross-compile target for wasm (needed by ironrdp)
+RUN rustup target add wasm32-unknown-unknown x86_64-pc-windows-gnu 2>/dev/null || true
+
+# --- Node.js + pnpm (for web UI) ---
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable pnpm
+
+# --- Build entrypoint script ---
+COPY <<'ENTRYPOINT_SCRIPT' /usr/local/bin/build-teleport.sh
+#!/bin/bash
+set -euo pipefail
+
+SRC_DIR="/src"
+OUT_DIR="/output"
+
+cd "$SRC_DIR"
+
+echo "=========================================="
+echo "  Teleport Builder"
+echo "=========================================="
+echo "  Go:     $(go version)"
+echo "  Rust:   $(rustc --version)"
+echo "  Node:   $(node --version)"
+echo "  OS:     linux"
+echo "  ARCH:   amd64"
+echo "=========================================="
+
+# Determine what to build
+TARGETS="${@:-all}"
+
+if [ "$TARGETS" = "all" ]; then
+    echo ">>> Building ALL binaries (teleport, tctl, tsh, tbot, teleport-update)..."
+    echo ""
+
+    # Build web UI first
+    echo ">>> Step 1/2: Building web assets..."
+    WEBASSETS_SKIP_BUILD=0 make ensure-webassets 2>&1 || {
+        echo ">>> Web UI build failed, falling back to skip webassets..."
+        WEBASSETS_SKIP_BUILD=1 make ensure-webassets 2>&1
+    }
+
+    echo ""
+    echo ">>> Step 2/2: Building Go binaries..."
+    make all OS=linux ARCH=amd64
+else
+    echo ">>> Building: $TARGETS"
+    echo ""
+
+    # For individual targets, skip webassets unless teleport is requested
+    if echo "$TARGETS" | grep -q "teleport"; then
+        echo ">>> Building web assets for teleport binary..."
+        WEBASSETS_SKIP_BUILD=0 make ensure-webassets 2>&1 || {
+            echo ">>> Web UI build failed, using placeholder webassets..."
+            WEBASSETS_SKIP_BUILD=1 make ensure-webassets 2>&1
+        }
+    fi
+
+    for target in $TARGETS; do
+        echo ">>> Building build/$target..."
+        make "build/$target" OS=linux ARCH=amd64
+    done
+fi
+
+echo ""
+echo ">>> Copying binaries to output..."
+mkdir -p "$OUT_DIR"
+for bin in build/*; do
+    if [ -f "$bin" ] && [ -x "$bin" ]; then
+        cp "$bin" "$OUT_DIR/"
+        name=$(basename "$bin")
+        size=$(du -h "$OUT_DIR/$name" | cut -f1)
+        echo "    ✓ $name ($size)"
+    fi
+done
+
+echo ""
+echo "=========================================="
+echo "  Build complete!"
+echo "  Binaries are in: $OUT_DIR/"
+echo "=========================================="
+ENTRYPOINT_SCRIPT
+
+RUN chmod +x /usr/local/bin/build-teleport.sh
+
+WORKDIR /src
+
+ENTRYPOINT ["/usr/local/bin/build-teleport.sh"]

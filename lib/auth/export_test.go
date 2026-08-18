@@ -312,6 +312,18 @@ func ValidateGithubAuthCallbackHelper(ctx context.Context, m GitHubManager, diag
 	return validateGithubAuthCallbackHelper(ctx, m, diagCtx, q, emitter, logger)
 }
 
+func MatchOIDCClaims(mappings []types.ClaimMapping, claims map[string]any) []string {
+	return matchOIDCClaims(mappings, claims)
+}
+
+func ClaimsToTraits(claims map[string]any) map[string][]string {
+	return claimsToTraits(claims)
+}
+
+func PickOIDCUsername(claims map[string]any, sub string) string {
+	return pickOIDCUsername(claims, sub)
+}
+
 func FormatHeaderFromMap(m map[string]string) http.Header {
 	return formatHeaderFromMap(m)
 }

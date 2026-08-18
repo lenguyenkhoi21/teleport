@@ -4677,7 +4677,8 @@ func (a *ServerWithRoles) UpsertOIDCConnector(ctx context.Context, connector typ
 	if err := a.authConnectorAction(types.KindOIDC, types.VerbUpdate); err != nil {
 		return nil, trace.Wrap(err)
 	}
-	if !modules.GetModules().Features().GetEntitlement(entitlements.OIDC).Enabled {
+	if !modules.GetModules().Features().GetEntitlement(entitlements.OIDC).Enabled &&
+		connector.GetSubKind() != types.OIDCConnectorSubKindCustom {
 		// TODO(zmb3): ideally we would wrap ErrRequiresEnterprise here, but
 		// we can't currently propagate wrapped errors across the gRPC boundary,
 		// and we want tctl to display a clean user-facing message in this case
@@ -4698,7 +4699,8 @@ func (a *ServerWithRoles) UpdateOIDCConnector(ctx context.Context, connector typ
 	if err := a.authConnectorAction(types.KindOIDC, types.VerbUpdate); err != nil {
 		return nil, trace.Wrap(err)
 	}
-	if !modules.GetModules().Features().GetEntitlement(entitlements.OIDC).Enabled {
+	if !modules.GetModules().Features().GetEntitlement(entitlements.OIDC).Enabled &&
+		connector.GetSubKind() != types.OIDCConnectorSubKindCustom {
 		// TODO(zmb3): ideally we would wrap ErrRequiresEnterprise here, but
 		// we can't currently propagate wrapped errors across the gRPC boundary,
 		// and we want tctl to display a clean user-facing message in this case
@@ -4718,7 +4720,8 @@ func (a *ServerWithRoles) CreateOIDCConnector(ctx context.Context, connector typ
 	if err := a.authConnectorAction(types.KindOIDC, types.VerbCreate); err != nil {
 		return nil, trace.Wrap(err)
 	}
-	if !modules.GetModules().Features().GetEntitlement(entitlements.OIDC).Enabled {
+	if !modules.GetModules().Features().GetEntitlement(entitlements.OIDC).Enabled &&
+		connector.GetSubKind() != types.OIDCConnectorSubKindCustom {
 		// TODO(zmb3): ideally we would wrap ErrRequiresEnterprise here, but
 		// we can't currently propagate wrapped errors across the gRPC boundary,
 		// and we want tctl to display a clean user-facing message in this case
@@ -4781,10 +4784,15 @@ func (a *ServerWithRoles) ListOIDCConnectors(ctx context.Context, limit int, sta
 
 func (a *ServerWithRoles) CreateOIDCAuthRequest(ctx context.Context, req types.OIDCAuthRequest) (*types.OIDCAuthRequest, error) {
 	if !modules.GetModules().Features().GetEntitlement(entitlements.OIDC).Enabled {
-		// TODO(zmb3): ideally we would wrap ErrRequiresEnterprise here, but
-		// we can't currently propagate wrapped errors across the gRPC boundary,
-		// and we want tctl to display a clean user-facing message in this case
-		return nil, trace.AccessDenied("OIDC is only available in Teleport Enterprise")
+		// custom OIDC connectors are served by the OSS implementation and
+		// do not require the Enterprise OIDC entitlement.
+		connector, err := a.authServer.GetOIDCConnector(ctx, req.ConnectorID, false)
+		if err != nil || connector.GetSubKind() != types.OIDCConnectorSubKindCustom {
+			// TODO(zmb3): ideally we would wrap ErrRequiresEnterprise here, but
+			// we can't currently propagate wrapped errors across the gRPC boundary,
+			// and we want tctl to display a clean user-facing message in this case
+			return nil, trace.AccessDenied("OIDC is only available in Teleport Enterprise")
+		}
 	}
 
 	if err := a.authorizeAction(types.KindOIDCRequest, types.VerbCreate); err != nil {
