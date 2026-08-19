@@ -1,19 +1,19 @@
-# Hướng dẫn Build Teleport v18.10.3 (Keycloak OIDC Patch)
+# Build Guide — Teleport v18.10.3 (Keycloak OIDC Patch)
 
 > **Branch**: `patch/v18.10.3-keycloak`
 > **Version**: 18.10.3
 > **Target**: Linux x86_64 (amd64)
-> **Build type**: OSS (Community) — không có enterprise code (`e/` directory rỗng)
+> **Build type**: OSS (Community) — no enterprise code (`e/` directory is empty)
 
 ---
 
-## 1. Tổng quan kiến trúc dự án
+## 1. Project Architecture Overview
 
 ```
 teleport/
-├── api/                    # Public API types (go module riêng)
+├── api/                    # Public API types (separate go module)
 ├── lib/                    # Core library code
-│   ├── auth/               # Authentication server (OIDC patch ở đây)
+│   ├── auth/               # Authentication server (OIDC patch is here)
 │   ├── web/                # Web proxy handlers
 │   ├── services/           # Backend services
 │   └── ...
@@ -24,38 +24,38 @@ teleport/
 │   ├── tbot/               # → binary `tbot` (machine identity)
 │   └── teleport-update/    # → binary `teleport-update` (auto-updater)
 ├── web/                    # Web UI (React/TypeScript)
-├── e/                      # Enterprise code (RỖNG trong repo này)
+├── e/                      # Enterprise code (EMPTY in this repo)
 ├── build.assets/           # Dockerfiles, build scripts
-├── Makefile                # Build system chính
+├── Makefile                # Main build system
 ├── go.mod                  # Go 1.25.12
 ├── Cargo.toml              # Rust workspace (RDP client)
 └── rust-toolchain.toml     # Rust 1.94.0
 ```
 
-### Các binary được build
+### Binaries produced
 
-| Binary | Mô tả | CGO | Phụ thuộc đặc biệt |
-|--------|--------|-----|---------------------|
-| `teleport` | Auth/Proxy/Node server | ✅ Bắt buộc | webassets, (tùy chọn: BPF, PAM, RDP) |
-| `tctl` | Admin CLI | ✅ (cho libfido2) | libfido2 (tùy chọn) |
-| `tsh` | User login CLI | ✅ (cho libfido2) | libfido2 (tùy chọn) |
-| `tbot` | Machine identity | ❌ CGO_ENABLED=0 | Không |
-| `teleport-update` | Auto-updater | ❌ CGO_ENABLED=0 | Không |
+| Binary | Description | CGO | Special dependencies |
+|--------|-------------|-----|----------------------|
+| `teleport` | Auth/Proxy/Node server | ✅ Required | webassets, (optional: BPF, PAM, RDP) |
+| `tctl` | Admin CLI | ✅ (for libfido2) | libfido2 (optional) |
+| `tsh` | User login CLI | ✅ (for libfido2) | libfido2 (optional) |
+| `tbot` | Machine identity | ❌ CGO_ENABLED=0 | None |
+| `teleport-update` | Auto-updater | ❌ CGO_ENABLED=0 | None |
 
 ---
 
-## 2. Yêu cầu hệ thống
+## 2. System Requirements
 
-### 2.1 Toolchain versions (từ source code)
+### 2.1 Toolchain versions (from source code)
 
 | Tool | Version | Source |
 |------|---------|--------|
 | Go | **1.25.12** | `go.mod` line 3 |
 | Rust | **1.94.0** | `rust-toolchain.toml` |
 | Node.js | **24.18.0** | `build.assets/versions.mk` |
-| pnpm | (qua corepack) | `package.json` |
+| pnpm | (via corepack) | `package.json` |
 
-### 2.2 Cài đặt dependencies trên Linux (Ubuntu/Debian)
+### 2.2 Install dependencies on Linux (Ubuntu/Debian)
 
 ```bash
 # Build essentials
@@ -71,24 +71,24 @@ export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 # Rust 1.94.0
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
-# rust-toolchain.toml sẽ tự pin version khi build
+# rust-toolchain.toml will auto-pin the version during build
 
-# Node.js 24.x (cho web UI)
+# Node.js 24.x (for web UI)
 curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt-get install -y nodejs
 corepack enable pnpm
 
-# libfido2 (tùy chọn — cho MFA hardware key support)
+# libfido2 (optional — for MFA hardware key support)
 sudo apt-get install -y libfido2-dev
 
-# PAM (tùy chọn — cho PAM authentication)
+# PAM (optional — for PAM authentication)
 sudo apt-get install -y libpam0g-dev
 
-# BPF (tùy chọn — cho enhanced session recording, cần kernel headers)
+# BPF (optional — for enhanced session recording, requires kernel headers)
 sudo apt-get install -y clang llvm libelf-dev
 ```
 
-### 2.3 Cài đặt trên macOS (cross-compile cho linux-amd64)
+### 2.3 Install on macOS (cross-compile for linux-amd64)
 
 ```bash
 brew install go node corepack pkg-config
@@ -97,67 +97,67 @@ corepack enable pnpm
 # Rust
 brew install rustup && rustup-init -y
 
-# Nếu cross-compile sang linux, cần Docker buildbox (xem mục 5)
+# For cross-compiling to linux, use the Docker buildbox (see section 5)
 ```
 
 ---
 
-## 3. Build cơ bản (Dev mode)
+## 3. Basic Build (Dev mode)
 
-### 3.1 Build tất cả binaries (KHÔNG có web UI)
+### 3.1 Build all binaries (WITHOUT web UI)
 
 ```bash
-# Nhanh nhất — skip web UI, chỉ build Go binaries
+# Fastest — skip web UI, build Go binaries only
 WEBASSETS_SKIP_BUILD=1 make all OS=linux ARCH=amd64
 ```
 
 Output: `build/teleport`, `build/tctl`, `build/tsh`, `build/tbot`, `build/teleport-update`
 
-### 3.2 Build từng binary riêng lẻ
+### 3.2 Build individual binaries
 
 ```bash
-# Chỉ build teleport server (skip webassets)
+# Build teleport server only (skip webassets)
 WEBASSETS_SKIP_BUILD=1 make build/teleport OS=linux ARCH=amd64
 
-# Chỉ build tctl
+# Build tctl only
 make build/tctl OS=linux ARCH=amd64
 
-# Chỉ build tsh
+# Build tsh only
 make build/tsh OS=linux ARCH=amd64
 
-# Chỉ build tbot (không cần CGO)
+# Build tbot only (no CGO needed)
 make build/tbot OS=linux ARCH=amd64
 ```
 
-### 3.3 Build có web UI (production)
+### 3.3 Build with web UI (production)
 
 ```bash
-# Build full: web UI + all binaries
+# Full build: web UI + all binaries
 make full OS=linux ARCH=amd64
 ```
 
-> ⚠️ `make full` sẽ build cả web UI (React app) trước, cần Node.js + pnpm.
-> Web UI được embed vào binary `teleport` qua go:embed.
+> ⚠️ `make full` builds the web UI (React app) first, requires Node.js + pnpm.
+> The web UI is embedded into the `teleport` binary via go:embed.
 
-### 3.4 Build debug mode
+### 3.4 Debug build
 
 ```bash
-# Build với debug symbols (cho dlv debugger)
+# Build with debug symbols (for dlv debugger)
 TELEPORT_DEBUG=true WEBASSETS_SKIP_BUILD=1 make all OS=linux ARCH=amd64
 ```
 
 ---
 
-## 4. Build trực tiếp bằng `go build` (không qua Make)
+## 4. Direct `go build` (without Make)
 
-Nếu chỉ cần build nhanh 1 binary mà không muốn dùng Makefile:
+If you only need to quickly build a single binary without using the Makefile:
 
 ```bash
-# teleport server (cần webassets hoặc dùng noembed tag)
+# teleport server (needs webassets or use noembed tag)
 CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
   go build -tags "webassets_embed" -o build/teleport ./tool/teleport
 
-# Nếu KHÔNG có webassets, dùng tag khác để skip embed:
+# Without webassets, use a different tag to skip embed:
 CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
   go build -o build/teleport ./tool/teleport
 
@@ -169,35 +169,35 @@ CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
 CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
   go build -o build/tsh ./tool/tsh
 
-# tbot (không cần CGO)
+# tbot (no CGO needed)
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -o build/tbot ./tool/tbot
 ```
 
-> ⚠️ Khi build `teleport` bằng `go build` trực tiếp, nếu chưa build web UI thì binary sẽ
-> serve web UI trống. Dùng `WEBASSETS_SKIP_BUILD=1 make ensure-webassets` để tạo placeholder.
+> ⚠️ When building `teleport` directly with `go build`, if the web UI hasn't been built,
+> the binary will serve an empty web UI. Run `WEBASSETS_SKIP_BUILD=1 make ensure-webassets` to create a placeholder.
 
 ---
 
-## 5. Build bằng Docker (Buildbox)
+## 5. Docker Build (Buildbox)
 
-Dự án cung cấp Docker buildbox cho reproducible builds. Dockerfile ở `build.assets/Dockerfile`.
+The project provides a Docker buildbox for reproducible builds. Dockerfile is at `build.assets/Dockerfile`.
 
-### 5.1 Build buildbox image
+### 5.1 Build the buildbox image
 
 ```bash
-# Build buildbox (Ubuntu 22.04 based, có đầy đủ dependencies)
+# Build buildbox (Ubuntu 22.04 based, all dependencies included)
 cd build.assets
 make build
 
-# Hoặc build thủ công
+# Or build manually
 docker build -t teleport-buildbox:latest -f Dockerfile .
 ```
 
-### 5.2 Build trong buildbox
+### 5.2 Build inside the buildbox
 
 ```bash
-# Chạy make trong container
+# Run make inside the container
 docker run --rm -v $(pwd):/go/src/github.com/gravitational/teleport \
   -w /go/src/github.com/gravitational/teleport \
   teleport-buildbox:latest \
@@ -206,74 +206,74 @@ docker run --rm -v $(pwd):/go/src/github.com/gravitational/teleport \
 
 ---
 
-## 6. Tạo release tarball
+## 6. Create a release tarball
 
 ```bash
-# Build + đóng gói tarball
+# Build + package into tarball
 make release OS=linux ARCH=amd64
 
 # Output: build/artifacts/teleport-v18.10.3-linux-amd64-bin.tar.gz
 ```
 
-Tarball chứa: `teleport`, `tctl`, `tsh`, `tbot`, `teleport-update`, `fdpass-teleport`, `README.md`, `CHANGELOG.md`, `install`, `examples/`
+The tarball contains: `teleport`, `tctl`, `tsh`, `tbot`, `teleport-update`, `fdpass-teleport`, `README.md`, `CHANGELOG.md`, `install`, `examples/`
 
 ---
 
-## 7. Build Web UI riêng
+## 7. Build Web UI separately
 
 ```bash
-# Cài dependencies
+# Install dependencies
 pnpm install --frozen-lockfile
 
 # Build web UI
 make build-ui
 
-# Hoặc thủ công:
+# Or manually:
 cd web
 pnpm build
 ```
 
-Web UI build output được đặt vào `webassets/` và embed vào binary `teleport` khi build.
+The web UI build output is placed in `webassets/` and embedded into the `teleport` binary during build.
 
 ---
 
-## 8. Chạy tests
+## 8. Run Tests
 
 ```bash
-# Unit tests cho phần OIDC custom (patch của mình)
+# Unit tests for the custom OIDC patch
 go test ./lib/auth/ -run TestCustomOIDC -v -count=1
 go test ./lib/auth/ -run TestMatchOIDCClaims -v -count=1
 go test ./lib/auth/ -run TestClaimsToTraitsMapping -v -count=1
 go test ./lib/auth/ -run TestPickOIDCUsername -v -count=1
 
-# Test toàn bộ auth package (nặng, cần thời gian)
+# Full auth package tests (heavy, takes time)
 go test ./lib/auth/... -count=1
 
-# Test api types
+# API types tests
 go test ./api/types/... -count=1
 ```
 
 ---
 
-## 9. Build flags và tùy chọn
+## 9. Build Flags and Options
 
-### Biến môi trường quan trọng
+### Important environment variables
 
-| Biến | Mặc định | Mô tả |
-|------|----------|-------|
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `OS` | auto-detect | Target OS: `linux`, `darwin`, `windows` |
 | `ARCH` | auto-detect | Target arch: `amd64`, `arm64`, `arm` |
-| `WEBASSETS_SKIP_BUILD` | `0` | Set `1` để skip build web UI |
-| `TELEPORT_DEBUG` | `false` | Set `true` cho debug build (có symbols) |
-| `FIPS` | (empty) | Set non-empty cho FIPS build |
-| `FIDO2` | auto-detect | `dynamic`, `static`, `yes` cho libfido2 support |
-| `RDPCLIENT_SKIP_BUILD` | `0` | Set `1` để skip RDP client (cần Rust) |
+| `WEBASSETS_SKIP_BUILD` | `0` | Set to `1` to skip building the web UI |
+| `TELEPORT_DEBUG` | `false` | Set to `true` for debug builds (with symbols) |
+| `FIPS` | (empty) | Set to non-empty for FIPS builds |
+| `FIDO2` | auto-detect | `dynamic`, `static`, `yes` for libfido2 support |
+| `RDPCLIENT_SKIP_BUILD` | `0` | Set to `1` to skip RDP client (requires Rust) |
 
 ### Build tags
 
-| Tag | Khi nào dùng |
+| Tag | When to use |
 |-----|-------------|
-| `webassets_embed` | Embed web UI vào binary (production) |
+| `webassets_embed` | Embed web UI into binary (production) |
 | `pam` | PAM authentication support |
 | `bpf` | BPF enhanced session recording (Linux only) |
 | `desktop_access_rdp` | Windows Remote Desktop support |
@@ -282,12 +282,12 @@ go test ./api/types/... -count=1
 
 ---
 
-## 10. Quick Start — Build nhanh nhất
+## 10. Quick Start — Fastest Build
 
-Nếu chỉ muốn build nhanh để test OIDC patch:
+If you just want to build quickly to test the OIDC patch:
 
 ```bash
-# 1. Đảm bảo Go 1.25.12+ đã cài
+# 1. Ensure Go 1.25.12+ is installed
 go version
 
 # 2. Build teleport + tctl (skip web UI, skip RDP)
@@ -299,11 +299,11 @@ WEBASSETS_SKIP_BUILD=1 RDPCLIENT_SKIP_BUILD=1 \
 ./build/tctl version
 ```
 
-Tổng thời gian build: ~2-5 phút (tùy máy), không cần Node.js hay Rust.
+Total build time: ~2-5 minutes (depending on machine), no Node.js or Rust needed.
 
 ---
 
-## 11. Cấu trúc output
+## 11. Output Structure
 
 ```
 build/
@@ -314,8 +314,8 @@ build/
 ├── teleport-update    # Auto-updater (~30MB, static)
 └── fdpass-teleport    # FD passing helper (Rust binary)
 
-build/artifacts/       # Release tarballs (sau `make release`)
+build/artifacts/       # Release tarballs (after `make release`)
 └── teleport-v18.10.3-linux-amd64-bin.tar.gz
 ```
 
-> 💡 Binary sizes lớn vì Go static linking. Dùng `make full` (có `-ldflags '-w -s'`) để strip debug info, giảm ~30%.
+> 💡 Binary sizes are large due to Go static linking. Use `make full` (with `-ldflags '-w -s'`) to strip debug info, reducing size by ~30%.

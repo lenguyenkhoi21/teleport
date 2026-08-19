@@ -3,14 +3,14 @@
 # build.sh — Build Teleport v18.10.3 (Keycloak OIDC Patch)
 # =============================================================================
 #
-# Script này build Teleport binaries bằng Docker container.
-# Không cần cài Go, Rust, Node.js trên máy — chỉ cần Docker.
+# This script builds Teleport binaries using a Docker container.
+# No need to install Go, Rust, or Node.js locally — only Docker is required.
 #
 # Usage:
-#   ./build.sh                    # Build tất cả (teleport, tctl, tsh, tbot)
-#   ./build.sh teleport tctl      # Build binary cụ thể
-#   ./build.sh --fast             # Build nhanh (skip web UI + RDP)
-#   ./build.sh --image-only       # Chỉ build Docker image, không build binary
+#   ./build.sh                    # Build all (teleport, tctl, tsh, tbot)
+#   ./build.sh teleport tctl      # Build specific binaries
+#   ./build.sh --fast             # Fast build (skip web UI + RDP)
+#   ./build.sh --image-only       # Only build Docker image, skip binary build
 #
 # Output: ./output/
 # =============================================================================

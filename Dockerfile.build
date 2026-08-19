@@ -11,13 +11,13 @@
 #        -v $(pwd)/output:/output \
 #        teleport-builder
 #
-#   3. Build chỉ binary cụ thể:
+#   3. Build specific binaries only:
 #      docker run --rm \
 #        -v $(pwd):/src \
 #        -v $(pwd)/output:/output \
 #        teleport-builder teleport tctl
 #
-#   Binaries sẽ nằm trong ./output/
+#   Binaries will be placed in ./output/
 # =============================================================================
 
 FROM ubuntu:22.04
